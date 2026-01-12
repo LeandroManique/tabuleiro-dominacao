@@ -40,3 +40,6 @@
 - [ ] Configurar webhook Stripe com URL de produção
 - [ ] Testar aplicação em produção
 - [ ] Entregar URLs (produção + repositório GitHub)
+
+## Bugs Críticos
+- [x] Corrigir erro de export default no server/_core/index.ts para Vercel (SyntaxError: module does not provide export named 'default')
