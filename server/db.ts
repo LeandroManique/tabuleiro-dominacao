@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { InsertUser, users, userProgress, InsertUserProgress, chatHistory, InsertChatHistory } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -35,7 +35,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     };
     const updateSet: Record<string, unknown> = {};
 
-    const textFields = ["name", "email", "loginMethod"] as const;
+    const textFields = ["name", "email", "loginMethod", "stripeCustomerId"] as const;
     type TextField = (typeof textFields)[number];
 
     const assignNullable = (field: TextField) => {
@@ -58,6 +58,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     } else if (user.openId === ENV.ownerOpenId) {
       values.role = 'admin';
       updateSet.role = 'admin';
+    }
+    if (user.isActive !== undefined) {
+      values.isActive = user.isActive;
+      updateSet.isActive = user.isActive;
     }
 
     if (!values.lastSignedIn) {
@@ -89,4 +93,127 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+// ============ Tabuleiro Functions ============
+
+/**
+ * Obtém o progresso do usuário no tabuleiro
+ */
+export async function getUserProgress(userId: number) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot get user progress: database not available");
+    return undefined;
+  }
+
+  const result = await db.select().from(userProgress).where(eq(userProgress.userId, userId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+/**
+ * Cria o progresso inicial do usuário
+ */
+export async function createUserProgress(userId: number) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot create user progress: database not available");
+    return undefined;
+  }
+
+  const values: InsertUserProgress = {
+    userId,
+    currentHouseId: 1,
+    xpPoints: 0,
+  };
+
+  await db.insert(userProgress).values(values);
+  return getUserProgress(userId);
+}
+
+/**
+ * Atualiza o progresso do usuário (avança para próxima casa)
+ */
+export async function updateUserProgress(userId: number, newHouseId: number, xpGained: number = 10) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot update user progress: database not available");
+    return undefined;
+  }
+
+  const current = await getUserProgress(userId);
+  if (!current) return undefined;
+
+  const newXp = current.xpPoints + xpGained;
+  const completedAt = newHouseId > 20 ? new Date() : null;
+
+  await db.update(userProgress)
+    .set({
+      currentHouseId: newHouseId,
+      xpPoints: newXp,
+      completedAt,
+    })
+    .where(eq(userProgress.userId, userId));
+
+  return getUserProgress(userId);
+}
+
+/**
+ * Salva uma mensagem no histórico de chat
+ */
+export async function saveChatMessage(data: InsertChatHistory) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot save chat message: database not available");
+    return undefined;
+  }
+
+  await db.insert(chatHistory).values(data);
+}
+
+/**
+ * Obtém o histórico de chat de uma casa específica
+ */
+export async function getChatHistory(userId: number, houseId: number) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot get chat history: database not available");
+    return [];
+  }
+
+  return db.select().from(chatHistory)
+    .where(eq(chatHistory.userId, userId))
+    .orderBy(chatHistory.createdAt);
+}
+
+/**
+ * Ativa o acesso do usuário (após pagamento)
+ */
+export async function activateUser(userId: number) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot activate user: database not available");
+    return false;
+  }
+
+  await db.update(users)
+    .set({ isActive: true })
+    .where(eq(users.id, userId));
+
+  return true;
+}
+
+/**
+ * Atualiza o Stripe Customer ID do usuário
+ */
+export async function updateStripeCustomerId(userId: number, customerId: string) {
+  const db = await getDb();
+  if (!db) {
+    console.warn("[Database] Cannot update stripe customer: database not available");
+    return false;
+  }
+
+  await db.update(users)
+    .set({ stripeCustomerId: customerId })
+    .where(eq(users.id, userId));
+
+  return true;
+}
